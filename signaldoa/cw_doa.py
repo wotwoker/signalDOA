@@ -5,8 +5,10 @@
 import numpy as np
 try:
     from .cbf import cbf_spectrum, steering_vector
+    from .peak_search import find_top_peaks
 except ImportError:
     from cbf import cbf_spectrum, steering_vector
+    from peak_search import find_top_peaks
 
 
 def add_awgn(X_clean: np.ndarray, snr_db: float, seed: int = None) -> np.ndarray:
@@ -20,36 +22,6 @@ def add_awgn(X_clean: np.ndarray, snr_db: float, seed: int = None) -> np.ndarray
         rng.standard_normal(X_clean.shape) + 1j * rng.standard_normal(X_clean.shape)
     )
     return X_clean + noise
-
-
-def find_top_peaks(
-    scan_angles: np.ndarray,
-    power: np.ndarray,
-    num_sources: int,
-    min_separation_deg: float = 5.0,
-) -> np.ndarray:
-    """从空间谱中找出若干个相互分开的强峰。
-
-    不直接取最大的 num_sources 个点，是因为同一个主瓣附近会有很多相邻高点。
-    min_separation_deg 用来避免把同一个主瓣重复算成多个信源。
-    """
-    peak_indices = np.flatnonzero((power[1:-1] >= power[:-2]) & (power[1:-1] >= power[2:])) + 1
-
-    if peak_indices.size == 0:
-        peak_indices = np.array([np.argmax(power)])
-
-    peak_indices = peak_indices[np.argsort(power[peak_indices])[::-1]]
-
-    selected: list[int] = []
-    for index in peak_indices:
-        angle = scan_angles[index]
-        separated = all(abs(angle - scan_angles[old]) >= min_separation_deg for old in selected)
-        if separated:
-            selected.append(int(index))
-        if len(selected) == num_sources:
-            break
-
-    return np.sort(scan_angles[selected])
 
 
 def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
@@ -66,13 +38,13 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     d = wavelength / 2          # 阵元间距，半波长避免栅瓣
     positions = np.arange(M) * d
 
-    theta_deg = np.array([15.0, 38.0])        # 两个真实 DOA
+    theta_deg = np.array([30.0, 38.0])        # 两个真实 DOA
     amplitudes = np.array([1.0, 1.0])         # 两个信源幅度
     frequencies = np.array([fc, fc])
 
     fs = 240e3                  # 采样率，Hz
     duration = 0.020            # 观测时长，s
-    snr_db = 10.0               # 信噪比，dB
+    snr_db = 0.0               # 信噪比，dB
 
     t = np.arange(0, duration, 1 / fs)
     num_sources = len(theta_deg)
@@ -127,7 +99,6 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
         scan_angles=scan_angles,
         power=power,
         num_sources=num_sources,
-        min_separation_deg=5.0,
     )
 
     # -----------------------------
@@ -139,7 +110,10 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     print(f"X shape = {X.shape}  # (sensors, snapshots)")
     print(f"true DOAs = {theta_deg} deg")
     print(f"CBF estimated DOAs = {np.round(theta_hat, 2)} deg")
-    print(f"absolute errors = {np.round(np.abs(theta_hat - theta_deg), 2)} deg")
+    if len(theta_hat) == len(theta_deg):
+        print(f"absolute errors = {np.round(np.abs(theta_hat - theta_deg), 2)} deg")
+    else:
+        print("absolute errors = not available because not all sources were resolved")
 
     if plot:
         import matplotlib.pyplot as plt
@@ -165,8 +139,12 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
                 label="estimated DOA" if i == 0 else None,
             )
 
-        plt.ylim(-20, 3)
-        plt.xlim(-90, 90)
+        finite_power_db = power_db[np.isfinite(power_db)]
+        y_min = max(np.percentile(finite_power_db, 1) - 3, -80)
+        y_max = np.max(finite_power_db) + 3
+
+        plt.ylim(y_min, y_max)
+        plt.xlim(scan_angles[0], scan_angles[-1])
         plt.xlabel("Scan angle (deg)")
         plt.ylabel("Normalized power (dB)")
         plt.title("Two-Source CW DOA Estimation with CBF")

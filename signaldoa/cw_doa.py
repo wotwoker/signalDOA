@@ -1,4 +1,16 @@
-"""双信源 CW 窄带 DOA 仿真：CBF、MVDR、MUSIC 对比。"""
+"""双信源 CW 窄带 DOA 仿真：CBF、MVDR、MUSIC 对比。
+参数形状：
+- X: (num_sensors, num_snapshots) # 阵列接收矩阵，多个信源叠加 + 噪声
+- S: (num_sources, num_snapshots) # 信源时域信号矩阵
+- scan_angles_deg: (num_scan_angles,)
+- power: (num_scan_angles,)
+- eigvals: (num_sensors,)  
+- theta_hat: (num_estimated_sources,)  # 估计的 DOA 数量可能少于真实源数，取决于分辨率和 SNR。
+- true_theta: (num_sources,)  # 真实 DOA 数量。
+- positions: (num_sensors,)  # 阵元位置。
+- time: (num_snapshots,)  # 快照时间点。
+
+"""
 
 from __future__ import annotations
 
@@ -31,34 +43,35 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     """运行默认双信源 CW + CBF/MVDR/MUSIC 仿真。"""
 
     # 1. 直接设定仿真参数
-    c = 1500.0
-    fc = 30e3
-    wavelength = c / fc
+    c = 1500.0                  # 声速，m/s
+    fc = 30e3                   # 中心频率，Hz
+    wavelength = c / fc         # 波长，m
 
-    M = 16
-    d = wavelength / 2
+    M = 16                      # 阵元数
+    d = wavelength / 2          # 阵元间距，半波长避免栅瓣
     positions = np.arange(M) * d
 
-    theta_deg = np.array([-10.0, 30.0])
-    scan_angles = np.linspace(-90, 90, 1801)
-    amplitudes = np.array([1.0, 1.0])
-    frequencies = np.array([fc, fc])
+    theta_deg = np.array([-10.0, 30.0, 40])   # 信源方位角，单位度
+    scan_angles = np.linspace(-90, 90, 1801)  
+    amplitudes = np.array([1.0, 1.0, 1.0])    # 信源幅度
+    frequencies = np.array([fc, fc, fc])      # 窄带 CW 信号，频率相同
 
-    fs = 240e3
-    duration = 0.020
-    snr_db = 20.0
+    fs = 240e3                  # 采样率，Hz
+    duration = 0.020            # 观测时长，s
+    snr_db = 20.0               # 信噪比，dB
 
-    t = np.arange(0, duration, 1 / fs)
+    t = np.arange(0, duration, 1 / fs) # 时间向量，s
     num_sources = len(theta_deg)
 
-    # 2. 生成彼此独立的窄带复包络 CW 信号
+    # 2. 生成彼此独立的窄带复包络 CW 信号，
     rng = np.random.default_rng()
     envelopes = (
         rng.standard_normal((num_sources, t.size))
         + 1j * rng.standard_normal((num_sources, t.size))
     ) / np.sqrt(2)
-    phases = np.array([0.0, np.pi / 3])
+    phases = np.array([0.0, np.pi / 3, np.pi / 2])
 
+    # 每个信源的时域信号矩阵 S， (num_sources, t.size)，满足 S_k(t) = A_k * e(t) * exp(j(2πf_k t + φ_k))
     S = amplitudes[:, None] * envelopes * np.exp(
         1j * (2 * np.pi * frequencies[:, None] * t[None, :] + phases[:, None])
     )

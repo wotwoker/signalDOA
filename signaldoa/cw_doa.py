@@ -15,7 +15,7 @@ except ImportError:
 
 def add_awgn(X_clean: np.ndarray, snr_db: float, seed: int = None) -> np.ndarray:
     """给阵列接收矩阵添加复高斯白噪声。"""
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(seed)  # 可选的随机数生成器。
 
     signal_power = np.mean(np.abs(X_clean) ** 2)
     noise_power = signal_power / (10 ** (snr_db / 10))
@@ -29,7 +29,6 @@ def add_awgn(X_clean: np.ndarray, snr_db: float, seed: int = None) -> np.ndarray
 def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     """运行默认双信源 CW + CBF 仿真。"""
 
-    # -----------------------------
     # 1. 直接设定仿真参数
     # -----------------------------
     c = 1500.0                  # 声速，m/s
@@ -40,7 +39,7 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     d = wavelength / 2          # 阵元间距，半波长避免栅瓣
     positions = np.arange(M) * d
 
-    theta_deg = np.array([30.0, 50])        # 两个真实 DOA
+    theta_deg = np.array([30.0, 50])        # 两个真实 DOA 角度
     scan_angles = np.linspace(-90, 90, 1801)
     amplitudes = np.array([1.0, 1.0])         # 两个信源幅度
     frequencies = np.array([fc, fc])
@@ -49,20 +48,23 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     duration = 0.020            # 观测时长，s
     snr_db = 0.0               # 信噪比，dB
 
-    t = np.arange(0, duration, 1 / fs)
-    num_sources = len(theta_deg)
+    t = np.arange(0, duration, 1 / fs) # 时间向量，s
+    num_sources = len(theta_deg) 
 
-    # -----------------------------
     # 2. 生成多个 CW 信源
     # -----------------------------
     # S 的形状是 (信源数, 快拍数)。
     # 第 k 行是第 k 个信源的时间序列。
-    phases = np.array([0.0, np.pi / 3])
-    S = amplitudes[:, None] * np.exp(
+    rng = np.random.default_rng()
+
+    envelopes = (
+    rng.standard_normal((num_sources, t.size)) + 
+        1j * rng.standard_normal((num_sources, t.size))) / np.sqrt(2)
+    phases = np.array([0.0, np.pi / 3]) # 每个信源的初始相位，rad
+    S = amplitudes[:, None] * envelopes * np.exp(
         1j * (2 * np.pi * frequencies[:, None] * t[None, :] + phases[:, None])
     )
 
-    # -----------------------------
     # 3. 按远场窄带阵列模型生成接收数据
     # -----------------------------
     # 单个信源模型：
@@ -83,7 +85,6 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
 
     X = add_awgn(X_clean, snr_db=snr_db, seed=None)
 
-    # -----------------------------
     # 4. CBF 扫描空间谱
     # -----------------------------
     # 181 个扫描点对应 1 deg 步长；1801 个扫描点则对应 0.1 deg 步长。
@@ -119,7 +120,6 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
         num_sources=num_sources,
     )
 
-    # -----------------------------
     # 5. 打印结果
     # -----------------------------
     print(f"fc = {fc / 1e3:.1f} kHz")

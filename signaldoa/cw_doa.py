@@ -5,9 +5,11 @@
 import numpy as np
 try:
     from .cbf import cbf_spectrum, steering_vector
+    from .mvdr import mvdr_spectrum
     from .peak_search import find_top_peaks
 except ImportError:
     from cbf import cbf_spectrum, steering_vector
+    from mvdr import mvdr_spectrum
     from peak_search import find_top_peaks
 
 
@@ -38,7 +40,8 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     d = wavelength / 2          # 阵元间距，半波长避免栅瓣
     positions = np.arange(M) * d
 
-    theta_deg = np.array([30.0, 38.0])        # 两个真实 DOA
+    theta_deg = np.array([30.0, 50])        # 两个真实 DOA
+    scan_angles = np.linspace(-90, 90, 1801)
     amplitudes = np.array([1.0, 1.0])         # 两个信源幅度
     frequencies = np.array([fc, fc])
 
@@ -85,19 +88,34 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     # -----------------------------
     # 181 个扫描点对应 1 deg 步长；1801 个扫描点则对应 0.1 deg 步长。
     # 扫描更细只会让谱峰读数更细，不会真正提高阵列本身的角度分辨率。
-    scan_angles = np.linspace(-90, 90, 1801)
-    power = cbf_spectrum(
+    cbf_power = cbf_spectrum(
         X=X,
         scan_angles_deg=scan_angles,
         fc=fc,
         c=c,
         positions=positions,
     )
-    power_db = 10 * np.log10(np.maximum(power, np.finfo(float).tiny) / np.max(power))
+    cbf_power_db = 10 * np.log10(np.maximum(cbf_power, np.finfo(float).tiny) / np.max(cbf_power))
 
-    theta_hat = find_top_peaks(
+    theta_hat_cbf = find_top_peaks(
         scan_angles=scan_angles,
-        power=power,
+        power=cbf_power,
+        num_sources=num_sources,
+    )
+
+    mvdr_power = mvdr_spectrum(
+        X=X,
+        scan_angles_deg=scan_angles,
+        fc=fc,
+        c=c,
+        positions=positions,
+        diagonal_loading=1e-2,
+    )
+    mvdr_power_db = 10 * np.log10(np.maximum(mvdr_power, np.finfo(float).tiny) / np.max(mvdr_power))
+
+    theta_hat_mvdr = find_top_peaks(
+        scan_angles=scan_angles,
+        power=mvdr_power,
         num_sources=num_sources,
     )
 
@@ -109,17 +127,23 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     print(f"M = {M}, d = {d:.4f} m")
     print(f"X shape = {X.shape}  # (sensors, snapshots)")
     print(f"true DOAs = {theta_deg} deg")
-    print(f"CBF estimated DOAs = {np.round(theta_hat, 2)} deg")
-    if len(theta_hat) == len(theta_deg):
-        print(f"absolute errors = {np.round(np.abs(theta_hat - theta_deg), 2)} deg")
+    print(f"CBF estimated DOAs = {np.round(theta_hat_cbf, 2)} deg")
+    if len(theta_hat_cbf) == len(theta_deg):
+        print(f"CBF absolute errors = {np.round(np.abs(theta_hat_cbf - theta_deg), 2)} deg")
     else:
-        print("absolute errors = not available because not all sources were resolved")
+        print("CBF absolute errors = not available because not all sources were resolved")
+    print(f"MVDR estimated DOAs = {np.round(theta_hat_mvdr, 2)} deg")
+    if len(theta_hat_mvdr) == len(theta_deg):
+        print(f"MVDR absolute errors = {np.round(np.abs(theta_hat_mvdr - theta_deg), 2)} deg")
+    else:
+        print("MVDR absolute errors = not available because not all sources were resolved")
 
     if plot:
         import matplotlib.pyplot as plt
 
         plt.figure(figsize=(10, 5))
-        plt.plot(scan_angles, power_db, linewidth=2, label="CBF spectrum")
+        plt.plot(scan_angles, cbf_power_db, linewidth=2, label="CBF spectrum")
+        plt.plot(scan_angles, mvdr_power_db, linewidth=2, label="MVDR spectrum")
 
         for i, theta in enumerate(theta_deg):
             plt.axvline(
@@ -130,16 +154,26 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
                 label="true DOA" if i == 0 else None,
             )
 
-        for i, theta in enumerate(theta_hat):
+        for i, theta in enumerate(theta_hat_cbf):
             plt.axvline(
                 theta,
                 color="tab:red",
                 linestyle=":",
                 linewidth=2.5,
-                label="estimated DOA" if i == 0 else None,
+                label="CBF estimated DOA" if i == 0 else None,
             )
 
-        finite_power_db = power_db[np.isfinite(power_db)]
+        for i, theta in enumerate(theta_hat_mvdr):
+            plt.axvline(
+                theta,
+                color="tab:blue",
+                linestyle="-.",
+                linewidth=2,
+                label="MVDR estimated DOA" if i == 0 else None,
+            )
+
+        all_power_db = np.concatenate([cbf_power_db, mvdr_power_db])
+        finite_power_db = all_power_db[np.isfinite(all_power_db)]
         y_min = max(np.percentile(finite_power_db, 1) - 3, -80)
         y_max = np.max(finite_power_db) + 3
 
@@ -147,7 +181,7 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
         plt.xlim(scan_angles[0], scan_angles[-1])
         plt.xlabel("Scan angle (deg)")
         plt.ylabel("Normalized power (dB)")
-        plt.title("Two-Source CW DOA Estimation with CBF")
+        plt.title("Two-Source CW DOA Estimation: CBF vs MVDR")
         plt.grid(True)
         plt.legend(loc="upper right")
         plt.tight_layout()
@@ -160,10 +194,13 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
         "time": t,
         "positions": positions,
         "theta_deg": theta_deg,
-        "theta_hat": theta_hat,
+        "theta_hat_cbf": theta_hat_cbf,
+        "theta_hat_mvdr": theta_hat_mvdr,
         "scan_angles": scan_angles,
-        "power": power,
-        "power_db": power_db,
+        "cbf_power": cbf_power,
+        "cbf_power_db": cbf_power_db,
+        "mvdr_power": mvdr_power,
+        "mvdr_power_db": mvdr_power_db,
         "fc": fc,
         "c": c,
         "wavelength": wavelength,

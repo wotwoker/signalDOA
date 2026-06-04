@@ -39,14 +39,14 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     d = wavelength / 2          # 阵元间距，半波长避免栅瓣
     positions = np.arange(M) * d
 
-    theta_deg = np.array([30.0, 50])        # 两个真实 DOA 角度
+    theta_deg = np.array([10.0, 50.0])        # 两个真实 DOA 角度
     scan_angles = np.linspace(-90, 90, 1801)
     amplitudes = np.array([1.0, 1.0])         # 两个信源幅度
     frequencies = np.array([fc, fc])
 
     fs = 240e3                  # 采样率，Hz
     duration = 0.020            # 观测时长，s
-    snr_db = 0.0               # 信噪比，dB
+    snr_db = 20.0               # 信噪比，dB
 
     t = np.arange(0, duration, 1 / fs) # 时间向量，s
     num_sources = len(theta_deg) 
@@ -141,49 +141,44 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     if plot:
         import matplotlib.pyplot as plt
 
+        plt.rcParams["font.family"] = ["DejaVu Sans", "SimSun"]
+        plt.rcParams["font.sans-serif"] = ["DejaVu Sans", "SimSun"]
+        plt.rcParams["axes.unicode_minus"] = False
+
         plt.figure(figsize=(10, 5))
-        plt.plot(scan_angles, cbf_power_db, linewidth=2, label="CBF spectrum")
-        plt.plot(scan_angles, mvdr_power_db, linewidth=2, label="MVDR spectrum")
+        plt.plot(scan_angles, cbf_power_db, linewidth=1.5, label="CBF 空间谱")
+        plt.plot(scan_angles, mvdr_power_db, linewidth=1.5, label="MVDR 空间谱")
+
+        all_power_db = np.concatenate([cbf_power_db, mvdr_power_db])
+        finite_power_db = all_power_db[np.isfinite(all_power_db)]
+        y_min = max(np.percentile(finite_power_db, 1) - 1, -80)
+        y_max = np.max(finite_power_db) + 0.1
 
         for i, theta in enumerate(theta_deg):
             plt.axvline(
                 theta,
-                color="tab:green",
-                linestyle="--",
-                linewidth=2,
-                label="true DOA" if i == 0 else None,
-            )
-
-        for i, theta in enumerate(theta_hat_cbf):
-            plt.axvline(
-                theta,
                 color="tab:red",
-                linestyle=":",
-                linewidth=2.5,
-                label="CBF estimated DOA" if i == 0 else None,
+                linestyle="--",
+                linewidth=0.8,
+                label="真实方位" if i == 0 else None,
             )
-
-        for i, theta in enumerate(theta_hat_mvdr):
-            plt.axvline(
+            plt.text(
                 theta,
-                color="tab:blue",
-                linestyle="-.",
-                linewidth=2,
-                label="MVDR estimated DOA" if i == 0 else None,
+                y_max,
+                "*",
+                color="tab:red",
+                fontsize=18,
+                ha="center",
+                va="top",
             )
-
-        all_power_db = np.concatenate([cbf_power_db, mvdr_power_db])
-        finite_power_db = all_power_db[np.isfinite(all_power_db)]
-        y_min = max(np.percentile(finite_power_db, 1) - 3, -80)
-        y_max = np.max(finite_power_db) + 3
 
         plt.ylim(y_min, y_max)
         plt.xlim(scan_angles[0], scan_angles[-1])
-        plt.xlabel("Scan angle (deg)")
-        plt.ylabel("Normalized power (dB)")
-        plt.title("Two-Source CW DOA Estimation: CBF vs MVDR")
-        plt.grid(True)
-        plt.legend(loc="upper right")
+        plt.xlabel("扫描角度 (deg)")
+        plt.ylabel("归一化功率 (dB)")
+        plt.title("双信源 CW DOA 估计：CBF 与 MVDR 对比")
+        plt.grid(True, linestyle=":", linewidth=0.5)
+        plt.legend(loc="upper left")
         plt.tight_layout()
         plt.show()
 

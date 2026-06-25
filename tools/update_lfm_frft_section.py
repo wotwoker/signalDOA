@@ -150,6 +150,76 @@ def frft_direct(x, p):
     return frft_matrix_direct(x.size, p) @ x
 
 
+def fft_convolve_linear(x, h):
+    """Linear convolution using FFT, returned with full length."""
+    out_len = x.size + h.size - 1
+    fft_len = 1 << int(np.ceil(np.log2(out_len)))
+    y = np.fft.ifft(np.fft.fft(x, fft_len) * np.fft.fft(h, fft_len))
+    return y[:out_len]
+
+
+def frft_ozaktas(x, p):
+    """Ozaktas-style fast FRFT using chirp multiplication and FFT convolution.
+
+    The core formula is the decomposition used in the reference:
+        chirp multiplication -> scaled Fourier/convolution -> chirp multiplication
+
+    This implementation uses the same centered, dimensionless coordinate
+    convention as frft_matrix_direct:
+        t_n = n / sqrt(N),  u_m = m / sqrt(N)
+    so the two FRFT functions can be compared in this notebook. The exact
+    amplitude normalization may differ from MATLAB implementations in papers,
+    but the focusing order and peak location are the important quantities here.
+    """
+    x = np.asarray(x, dtype=complex)
+    N_local = x.size
+    p_work = np.mod(p, 4.0)
+    x_work = x.copy()
+
+    if np.isclose(p_work, 0.0):
+        return x_work
+    if np.isclose(p_work, 1.0):
+        return dft_unitary(x_work)
+    if np.isclose(p_work, 2.0):
+        return x_work[::-1].copy()
+    if np.isclose(p_work, 3.0):
+        return idft_unitary(x_work)
+
+    # Reduce the order to the Ozaktas core range 0.5 <= p <= 1.5.
+    if p_work > 2.0:
+        p_work -= 2.0
+        x_work = x_work[::-1]
+    if p_work > 1.5:
+        p_work -= 1.0
+        x_work = dft_unitary(x_work)
+    if p_work < 0.5:
+        p_work += 1.0
+        x_work = idft_unitary(x_work)
+
+    alpha = p_work * np.pi / 2
+    cot_alpha = 1 / np.tan(alpha)
+    csc_alpha = 1 / np.sin(alpha)
+
+    # Paper notation uses t = n / (2*Delta_x), u = m / (2*Delta_x).
+    # Here 2*Delta_x = sqrt(N), matching the direct DFRFT coordinates.
+    two_delta_x = np.sqrt(N_local)
+    n = np.arange(N_local) - (N_local - 1) / 2
+    n2_scaled = (n**2) / (two_delta_x**2)
+
+    chirp_factor = cot_alpha - csc_alpha
+    pre_chirp = np.exp(1j * np.pi * chirp_factor * n2_scaled)
+    post_chirp = pre_chirp.copy()
+
+    k = np.arange(-(N_local - 1), N_local)
+    conv_chirp = np.exp(1j * np.pi * csc_alpha * (k**2) / (two_delta_x**2))
+
+    conv_full = fft_convolve_linear(x_work * pre_chirp, conv_chirp)
+    conv_center = conv_full[N_local - 1 : N_local - 1 + N_local]
+
+    A_alpha = np.sqrt((1 - 1j * cot_alpha) / (2 * np.pi))
+    return (A_alpha / two_delta_x) * post_chirp * conv_center
+
+
 def normalized_db(power_like):
     power_like = np.asarray(power_like)
     return 10 * np.log10(np.maximum(power_like, np.finfo(float).tiny) / np.max(power_like))
@@ -182,6 +252,7 @@ print("FRFT analysis segment")
 print(f"N_frft = {N_frft}, fs_frft = {fs_frft / 1e3:.1f} kHz, stride = {frft_stride}")
 print(f"p=0 check error = {np.linalg.norm(frft_direct(s_frft_unit, 0) - s_frft_unit):.2e}")
 print(f"p=2 check error = {np.linalg.norm(frft_direct(s_frft_unit, 2) - s_frft_unit[::-1]):.2e}")
+print(f"Ozaktas function output length = {frft_ozaktas(s_frft_unit, 0.9).size}")
 ''',
     ),
     code(
@@ -224,6 +295,145 @@ plt.tight_layout()
         "frft-05-focus-plot",
         r'''
 # -----------------------------
+# FRFT magnitude surface and u-axis section
+# -----------------------------
+# This reproduces the two common figures used in papers:
+#   (a) FRFT magnitude versus fractional order and normalized u
+#   (b) the u-axis section at the best fractional order
+frft_surface_orders = orders
+u_axis_norm = np.linspace(-15.0, 15.0, N_frft)
+frft_magnitude_surface = np.zeros((frft_surface_orders.size, N_frft))
+
+for i_order, p in enumerate(frft_surface_orders):
+    Xp = frft_direct(s_frft_unit, p)
+    frft_magnitude_surface[i_order] = np.abs(Xp)
+
+surface_best_idx = int(np.argmax(np.max(frft_magnitude_surface, axis=1)))
+surface_best_order = float(frft_surface_orders[surface_best_idx])
+surface_best_section = frft_magnitude_surface[surface_best_idx]
+
+U_grid, P_grid = np.meshgrid(u_axis_norm, frft_surface_orders)
+
+fig = plt.figure(figsize=(12, 5))
+
+ax = fig.add_subplot(1, 2, 1, projection="3d")
+ax.plot_surface(
+    U_grid,
+    P_grid,
+    frft_magnitude_surface,
+    cmap="viridis",
+    linewidth=0,
+    antialiased=True,
+    rstride=2,
+    cstride=2,
+)
+ax.set_xlabel("Normalized u")
+ax.set_ylabel("Fractional order p")
+ax.set_zlabel("FRFT magnitude")
+ax.set_title("(a) FRFT of LFM")
+ax.view_init(elev=25, azim=-55)
+
+ax2 = fig.add_subplot(1, 2, 2)
+ax2.plot(u_axis_norm, surface_best_section, color="tab:blue", linewidth=1.2)
+ax2.axvline(
+    u_axis_norm[int(np.argmax(surface_best_section))],
+    color="tab:cyan",
+    linewidth=1.1,
+    alpha=0.9,
+)
+ax2.set_xlabel("Normalized u")
+ax2.set_ylabel("FRFT magnitude")
+ax2.set_title(f"(b) u-axis section, p = {surface_best_order:.3f}")
+ax2.grid(True, alpha=0.35)
+ax2.set_xlim(u_axis_norm[-1], u_axis_norm[0])
+
+plt.tight_layout()
+''',
+    ),
+    code(
+        "frft-06-ozaktas-plot",
+        r'''
+# -----------------------------
+# Ozaktas FRFT version: order scan, surface, and u-axis section
+# -----------------------------
+# This cell actually uses frft_ozaktas() to produce a separate set of figures.
+oz_peak_to_mean = np.zeros_like(orders)
+oz_entropy = np.zeros_like(orders)
+oz_magnitude_surface = np.zeros((orders.size, N_frft))
+
+for i_order, p in enumerate(orders):
+    Xp_oz = frft_ozaktas(s_frft_unit, p)
+    mag_oz = np.abs(Xp_oz)
+    power_oz = mag_oz**2
+    power_oz = power_oz / np.sum(power_oz)
+    oz_magnitude_surface[i_order] = mag_oz
+    oz_peak_to_mean[i_order] = np.max(power_oz) / np.mean(power_oz)
+    oz_entropy[i_order] = -np.sum(power_oz * np.log(power_oz + np.finfo(float).tiny))
+
+oz_best_idx = int(np.argmax(oz_peak_to_mean))
+p_oz_best = float(orders[oz_best_idx])
+alpha_oz_best = p_oz_best * np.pi / 2
+oz_best_section = oz_magnitude_surface[oz_best_idx]
+
+print("Ozaktas FRFT order scan")
+print(f"Best Ozaktas FRFT order = {p_oz_best:.3f}")
+print(f"Best rotation angle alpha = {np.rad2deg(alpha_oz_best):.2f} deg")
+print(f"Peak-to-mean = {oz_peak_to_mean[oz_best_idx]:.2f}")
+print(f"Entropy = {oz_entropy[oz_best_idx]:.2f}")
+
+plt.figure(figsize=(10, 4))
+plt.plot(orders, peak_to_mean, linewidth=1.5, alpha=0.75, label="direct DFRFT")
+plt.plot(orders, oz_peak_to_mean, linewidth=1.8, label="Ozaktas FRFT")
+plt.axvline(p_best, color="tab:red", linestyle="--", linewidth=1.0, label=f"direct best {p_best:.3f}")
+plt.axvline(p_oz_best, color="tab:purple", linestyle=":", linewidth=1.3, label=f"Ozaktas best {p_oz_best:.3f}")
+plt.xlabel("FRFT order p")
+plt.ylabel("Peak-to-mean concentration")
+plt.title("Direct DFRFT vs Ozaktas FRFT order scan")
+plt.legend(loc="best")
+plt.tight_layout()
+
+U_oz_grid, P_oz_grid = np.meshgrid(u_axis_norm, orders)
+
+fig = plt.figure(figsize=(12, 5))
+
+ax = fig.add_subplot(1, 2, 1, projection="3d")
+ax.plot_surface(
+    U_oz_grid,
+    P_oz_grid,
+    oz_magnitude_surface,
+    cmap="viridis",
+    linewidth=0,
+    antialiased=True,
+    rstride=2,
+    cstride=2,
+)
+ax.set_xlabel("Normalized u")
+ax.set_ylabel("Fractional order p")
+ax.set_zlabel("Ozaktas FRFT magnitude")
+ax.set_title("(a) Ozaktas FRFT of LFM")
+ax.view_init(elev=25, azim=-55)
+
+ax2 = fig.add_subplot(1, 2, 2)
+ax2.plot(u_axis_norm, oz_best_section, color="tab:blue", linewidth=1.2)
+ax2.axvline(
+    u_axis_norm[int(np.argmax(oz_best_section))],
+    color="tab:cyan",
+    linewidth=1.1,
+    alpha=0.9,
+)
+ax2.set_xlabel("Normalized u")
+ax2.set_ylabel("Ozaktas FRFT magnitude")
+ax2.set_title(f"(b) Ozaktas u-axis section, p = {p_oz_best:.3f}")
+ax2.grid(True, alpha=0.35)
+ax2.set_xlim(u_axis_norm[-1], u_axis_norm[0])
+
+plt.tight_layout()
+''',
+    ),
+    code(
+        "frft-07-focus-plot",
+        r'''
+# -----------------------------
 # Compare ordinary FFT with best-order FRFT
 # -----------------------------
 X_fft = frft_direct(s_frft_unit, 1.0)
@@ -258,7 +468,7 @@ plt.tight_layout()
 ''',
     ),
     md(
-        "frft-06-cbf-theory",
+        "frft-08-cbf-theory",
         r"""
 ## 2. \u4e24\u79cd FRFT-CBF \u601d\u8def
 
@@ -323,7 +533,7 @@ $$
 """,
     ),
     code(
-        "frft-07-array-simulation",
+        "frft-09-array-simulation",
         r'''
 # -----------------------------
 # ULA LFM array simulation
@@ -397,7 +607,7 @@ print(f"full-pulse p_best = {p_best:.3f}, CBF-window p_best = {p_cbf_best:.3f}")
 ''',
     ),
     code(
-        "frft-08-delay-sum-cbf",
+        "frft-10-delay-sum-cbf",
         r'''
 # -----------------------------
 # Method A: delay-sum first, then FRFT focused-bin power
@@ -464,7 +674,7 @@ plt.tight_layout()
 ''',
     ),
     code(
-        "frft-09-frf-domain-cbf",
+        "frft-11-frf-domain-cbf",
         r'''
 # -----------------------------
 # Method B: paper-style FRF-domain CBF, P(theta) = a^H R a
@@ -549,7 +759,7 @@ plt.tight_layout()
 ''',
     ),
     md(
-        "frft-10-summary",
+        "frft-12-summary",
         r"""
 ## 3. \u5c0f\u7ed3
 

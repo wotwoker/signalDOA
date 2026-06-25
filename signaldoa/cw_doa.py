@@ -51,13 +51,13 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
     d = wavelength / 2          # 阵元间距，半波长避免栅瓣
     positions = np.arange(M) * d
 
-    theta_deg = np.array([-10.0, 30.0, 40])   # 信源方位角，单位度
+    theta_deg = np.array([-10.0, 30.0])   # 信源方位角，单位度
     scan_angles = np.linspace(-90, 90, 1801)  
-    amplitudes = np.array([1.0, 1.0, 1.0])    # 信源幅度
-    frequencies = np.array([fc, fc, fc])      # 窄带 CW 信号，频率相同
+    amplitudes = np.array([1.0, 1.0])    # 信源幅度
+    frequencies = np.array([fc, fc])      # 窄带 CW 信号，频率相同
 
-    fs = 240e3                  # 采样率，Hz
-    duration = 0.020            # 观测时长，s
+    fs = 500e3                  # 采样率，Hz
+    duration = 0.010            # 观测时长，s
     snr_db = 20.0               # 信噪比，dB
 
     t = np.arange(0, duration, 1 / fs) # 时间向量，s
@@ -69,7 +69,7 @@ def run_demo(plot: bool = True) -> dict[str, np.ndarray | float]:
         rng.standard_normal((num_sources, t.size))
         + 1j * rng.standard_normal((num_sources, t.size))
     ) / np.sqrt(2)
-    phases = np.array([0.0, np.pi / 3, np.pi / 2])
+    phases = np.array([0.0, np.pi / 3])
 
     # 每个信源的时域信号矩阵 S， (num_sources, t.size)，满足 S_k(t) = A_k * e(t) * exp(j(2πf_k t + φ_k))
     S = amplitudes[:, None] * envelopes * np.exp(
